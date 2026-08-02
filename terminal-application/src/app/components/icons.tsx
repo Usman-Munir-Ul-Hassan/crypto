@@ -24,7 +24,9 @@ export type IconName =
   | "key"
   | "eye"
   | "monitor"
-  | "smartphone";
+  | "smartphone"
+  | "camera"
+  | "trash";
 
 const PATHS: Record<IconName, JSX.Element> = {
   dashboard: (
@@ -133,6 +135,18 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <rect x="5" y="2" width="14" height="20" rx="2" />
       <line x1="12" y1="18" x2="12.01" y2="18" />
+    </>
+  ),
+  camera: (
+    <>
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </>
+  ),
+  trash: (
+    <>
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
     </>
   ),
 };

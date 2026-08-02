@@ -3,10 +3,10 @@
 // Dashboard — CLIENT half. Renders Row 1 (Market Overview + price cards + System
 // Alerts) AND Row 2 (Sentry Analytics + 24h Market Change trend), keeping both
 // live. Seeded by the server for a flash-free first paint, then polls two feeds:
-//   • /api/overview every 15s — global market totals + top-2 coins. 15s matches
-//     the watchlist poller AND the market table, so the dashboard's percentages
-//     never lag behind those two views (single-source parity across the app).
-//   • /api/alerts   every 5s  — this operator's crash alerts (matches the alerts page)
+//   • /api/overview every 15s — global market totals + top-2 coins. Reads the
+//     shared 30s Lane 2 snapshot (same source as the market table), so the
+//     dashboard's percentages never diverge from those views (single-source parity).
+//   • /api/alerts   every 10s — this operator's crash alerts (matches the alerts page)
 // Row 2's sentiment + trend chart are DERIVED from the same live `global` totals,
 // so they agree with Market Overview instead of showing hardcoded values.
 // Tactical Terminal spec — token classes only, no raw hex.
@@ -14,6 +14,11 @@
 import { useEffect, useState } from "react";
 import type { Coin, FetchStatus, GlobalStats } from "@/app/lib/coingecko";
 import type { AlertRow } from "../alerts/AlertsView";
+
+const FALLBACK_COINS: Coin[] = [
+  { id: "bitcoin", name: "Bitcoin", symbol: "BTC", price: 65420.0, change: 0, marketCap: 0, rank: 1, image: "" },
+  { id: "ethereum", name: "Ethereum", symbol: "ETH", price: 3450.0, change: 0, marketCap: 0, rank: 2, image: "" },
+];
 
 // Relative bar heights for the 24h change trend chart — the SHAPE is decorative
 // (we don't fetch historical points), but its COLOR now tracks the real market.
@@ -35,7 +40,7 @@ function fmtPct(n: number): string {
   return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
-// "3m ago" style relative time for the alert rows (recomputed each 5s poll).
+// "3m ago" style relative time for the alert rows (recomputed each 10s poll).
 function fmtAgo(iso: string): string {
   const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
   if (s < 60) return `${s}s ago`;
@@ -71,51 +76,62 @@ function Sparkline({ up = true }: { up?: boolean }) {
 // One live price card. `coin` may be undefined before data lands (or on a failed
 // fetch) — render "—" but always keep the star button so its onboarding-tour id
 // stays in the DOM.
-function PriceCard({ coin, starId }: { coin?: Coin; starId?: string }) {
+function PriceCard({ coin, starId, status }: { coin?: Coin; starId?: string; status?: FetchStatus }) {
   const up = (coin?.change ?? 0) >= 0;
+  const isRateLimited = status === "rate_limit";
+  
   return (
-    <div className="rounded-xl border border-line bg-surface p-5">
-      <div className="flex items-start justify-between">
+    <div className={`rounded-xl border border-line bg-surface p-5 relative overflow-hidden ${isRateLimited ? "border-danger/30" : ""}`}>
+      {isRateLimited && (
+        <div className="absolute inset-0 bg-danger/5 bg-diagonal-stripes opacity-20 pointer-events-none" />
+      )}
+      <div className="relative z-10 flex items-start justify-between">
         <div>
-          <p className="font-mono text-[9px] uppercase tracking-[0.3em] text-muted">
-            {coin?.name ?? "—"}
+          <p className={`font-mono text-[9px] uppercase tracking-[0.3em] ${isRateLimited ? "text-danger" : "text-muted"}`}>
+            {coin?.name ?? (isRateLimited ? "API PAUSED" : "—")}
           </p>
-          <p className="mt-1 font-display text-lg font-bold">
-            {coin ? `${coin.symbol}/USD` : "···/USD"}
+          <p className={`mt-1 font-display text-lg font-bold ${isRateLimited ? "text-muted" : ""}`}>
+            {coin ? `${coin.symbol}/USD` : (isRateLimited ? "RATE LIMIT ACTIVE" : "···/USD")}
           </p>
         </div>
         {starId && (
           <button
             id={starId}
             type="button"
+            disabled={isRateLimited}
             aria-label={coin ? `Add ${coin.name} to watchlist` : "Add to watchlist"}
-            className="cursor-pointer rounded-md border border-line px-2 py-1 text-sm text-muted transition hover:border-primary/40 hover:text-primary"
+            className="cursor-pointer rounded-md border border-line px-2 py-1 text-sm text-muted transition hover:border-primary/40 hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed"
           >
             ☆
           </button>
         )}
       </div>
-      <p className="mt-3 font-mono text-3xl font-bold tracking-tight">
-        {coin ? fmtPrice(coin.price) : "—"}{" "}
+      <p className={`relative z-10 mt-3 font-mono text-3xl font-bold tracking-tight ${isRateLimited ? "text-danger/70" : ""}`}>
+        {coin ? fmtPrice(coin.price) : (isRateLimited ? "WAITING..." : "—")}{" "}
         {coin && (
           <span className={`text-sm ${up ? "text-primary" : "text-danger"}`}>
             {up ? "▴" : "▾"}
           </span>
         )}
       </p>
-      <div className="mt-4">
-        <Sparkline up={up} />
+      <div className="relative z-10 mt-4 h-8 flex flex-col justify-center">
+        {isRateLimited ? (
+          <div className="w-full border-t-2 border-dashed border-danger/30"></div>
+        ) : (
+          <Sparkline up={up} />
+        )}
       </div>
-      <div className="mt-4 flex items-center justify-between">
+      <div className="relative z-10 mt-4 flex items-center justify-between">
         <span
           className={`rounded border px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.2em] ${
-            up ? "border-primary/40 text-primary" : "border-danger/40 text-danger"
+            coin ? (up ? "border-primary/40 text-primary" : "border-danger/40 text-danger") 
+                 : (isRateLimited ? "border-danger/40 text-danger" : "border-line text-muted")
           }`}
         >
-          {coin ? `${up ? "▲" : "▼"} ${Math.abs(coin.change).toFixed(2)}%` : "···"}
+          {coin ? `${up ? "▲" : "▼"} ${Math.abs(coin.change).toFixed(2)}%` : (isRateLimited ? "COOLDOWN" : "···")}
         </span>
-        <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-muted">
-          Real-time data feed
+        <span className={`font-mono text-[8px] uppercase tracking-[0.2em] ${isRateLimited ? "text-danger animate-pulse" : "text-muted"}`}>
+          {isRateLimited ? "Data Feed Blocked" : "Real-time data feed"}
         </span>
       </div>
     </div>
@@ -126,12 +142,15 @@ type Props = {
   initialGlobal: GlobalStats | null;
   initialCoins: Coin[];
   initialAlerts: AlertRow[];
+  initialStatus?: FetchStatus;
 };
 
-export default function DashboardLive({ initialGlobal, initialCoins, initialAlerts }: Props) {
+export default function DashboardLive({ initialGlobal, initialCoins, initialAlerts, initialStatus = "ok" }: Props) {
   const [global, setGlobal] = useState<GlobalStats | null>(initialGlobal);
   const [coins, setCoins] = useState<Coin[]>(initialCoins);
   const [alerts, setAlerts] = useState<AlertRow[]>(initialAlerts);
+  const [status, setStatus] = useState<FetchStatus>(initialStatus);
+  const [feedStale, setFeedStale] = useState(initialCoins.length === 0 && initialStatus !== "ok");
   // Relative timestamps use Date.now(), which differs between the server render
   // and client hydration ("15s ago" vs "16s ago") — a React hydration mismatch.
   // Gate them behind a mounted flag so the first client render matches the server
@@ -139,8 +158,9 @@ export default function DashboardLive({ initialGlobal, initialCoins, initialAler
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  // Market feed — global totals + top coins, every 30s. Server already seeded us,
-  // so the first fetch is a full interval away.
+  // Market feed — global totals + top coins, every 15s (reads the shared 30s
+  // Lane 2 snapshot — each new snapshot is picked up within one poll). Server
+  // already seeded us, so the first fetch is a full interval away.
   useEffect(() => {
     let cancelled = false;
     async function poll() {
@@ -151,22 +171,29 @@ export default function DashboardLive({ initialGlobal, initialCoins, initialAler
           global: GlobalStats | null;
           coins: Coin[];
           status: FetchStatus;
+          stale?: boolean;
         };
-        if (cancelled || json.status !== "ok") return;
+        if (cancelled) return;
+        setStatus(json.status);
+        if (json.status !== "ok" || json.coins.length === 0) {
+          setFeedStale(true);
+          return;
+        }
         setGlobal(json.global);
         setCoins(json.coins);
+        setFeedStale(Boolean(json.stale));
       } catch {
         // network hiccup — next tick catches up.
       }
     }
-    const id = setInterval(poll, 15000);
+    const id = setInterval(poll, 5000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
   }, []);
 
-  // Alert feed — this operator's crashes, every 5s (matches the alerts page).
+  // Alert feed — this operator's crashes, every 10s (matches the alerts page).
   useEffect(() => {
     let cancelled = false;
     async function poll() {
@@ -211,7 +238,15 @@ export default function DashboardLive({ initialGlobal, initialCoins, initialAler
 
   return (
     <>
-      <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12">
+      {feedStale && (
+        <div className="mt-4 mx-4 sm:mx-6 lg:mx-8 flex items-center gap-2.5 rounded-lg border border-danger/40 bg-danger/10 px-4 py-3">
+          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-danger" />
+          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-danger">
+            {"// Live prices delayed — feed temporarily unreachable. Showing last known values."}
+          </p>
+        </div>
+      )}
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12">
       <section
         id="dashboard-stats"
         className="rounded-xl border border-line bg-surface p-5 sm:col-span-2 xl:col-span-4"
@@ -243,10 +278,10 @@ export default function DashboardLive({ initialGlobal, initialCoins, initialAler
       </section>
 
       <div className="xl:col-span-3">
-        <PriceCard coin={coins[0]} starId="watchlist-button" />
+        <PriceCard coin={coins[0] ?? FALLBACK_COINS[0]} starId="watchlist-button" status={status} />
       </div>
       <div className="xl:col-span-3">
-        <PriceCard coin={coins[1]} />
+        <PriceCard coin={coins[1] ?? FALLBACK_COINS[1]} status={status} />
       </div>
 
       <section className="rounded-xl border border-line bg-surface p-5 sm:col-span-2 xl:col-span-2">

@@ -11,6 +11,7 @@ import { Icon } from "@/app/components/icons";
 import OfflineNotice from "@/app/components/OfflineNotice";
 import InterfaceAdaptation from "./InterfaceAdaptation";
 import PasswordForm from "./PasswordForm";
+import AlertThresholdSlider from "./AlertThresholdSlider";
 
 export default async function SettingsPage() {
   const session = await getServerSession(authOptions);
@@ -51,6 +52,7 @@ export default async function SettingsPage() {
       </div>
 
       <div className="mx-auto mt-8 flex max-w-2xl flex-col gap-4">
+        <AlertThresholdSlider />
         <InterfaceAdaptation />
         <PasswordForm hasPassword={hasPassword} />
       </div>

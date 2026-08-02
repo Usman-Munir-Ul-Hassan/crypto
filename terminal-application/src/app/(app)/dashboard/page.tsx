@@ -99,6 +99,7 @@ export default async function DashboardPage() {
           initialGlobal={globalRes.global}
           initialCoins={markets.coins.slice(0, 2)}
           initialAlerts={initialAlerts}
+          initialStatus={markets.status}
         />
       </main>
 

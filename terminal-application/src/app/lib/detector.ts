@@ -1,6 +1,6 @@
 // Lane 1's intelligence core — flash-crash AND price-surge detection. It does
 // NOT poll or fetch; the poller hands it the SAME price snapshot it just pulled
-// each 15s tick, and this file decides which coins are crashing or spiking.
+// each 30s tick, and this file decides which coins are crashing or spiking.
 //
 // The model (section 15.1, extended): compare each coin's current price to the
 // baseline we saved last tick. Drop <= -2% -> flash crash. Rise >= +2% -> price
@@ -19,18 +19,13 @@
 import { prisma } from "./prisma";
 import type { Coin } from "./coingecko";
 import { createLogger } from "./logger";
+import { notifyWatchers } from "./mailer";
 
 // Component-tagged structured logger (section 19.2) — every line gets an ISO
 // timestamp, level, [detector] tag, and structured context.
 const log = createLogger("detector");
 
-// A drop of this % or worse (more negative) is a crash. -2.0 per the spec.
-// TEST MODE: temporarily -0.01 so ANY real dip fires an alert (not exactly 0 —
-// pct <= 0 would fire on perfectly flat prices too). Restore to -2.0 after.
-const CRASH_THRESHOLD_PCT = -0.01;
-// A rise of this % or better is a surge — the mirror alert of a crash.
-// TEST MODE: temporarily 0.01 (spec value: 2.0). Restore after testing.
-const SURGE_THRESHOLD_PCT = 0.01;
+// Thresholds are fetched dynamically from the DB per detection cycle.
 // One alert per asset per direction per this window — stops a sustained move
 // spamming an alert every tick (section 15.2 "Alert Cooldown Period"). After it
 // lapses, a still-moving price earns a fresh alert.
@@ -130,13 +125,26 @@ async function recordAlert(
       times.set(coin.id, now);
       // Alert event: asset, current price, baseline, move %, creation result
       // (section 19.1 "When a crash is detected, the log includes...").
-      log.warn(direction === "crash" ? "flash crash detected" : "price surge detected", {
+      log.warn(direction === "crash" ? "price drop detected" : "price surge detected", {
         asset: coin.name,
         assetId: coin.id,
         price: current,
         baseline,
         movePct: `${pct.toFixed(2)}%`,
         alert: "created",
+      });
+
+      // Email everyone watching this asset — fire-and-forget so SMTP latency
+      // never delays the detection cycle. Only fires on a NEW alert row, so
+      // the 60s cooldown doubles as the email rate limit. notifyWatchers
+      // swallows its own errors (logged inside the mailer).
+      void notifyWatchers({
+        assetId: coin.id,
+        assetName: coin.name,
+        direction,
+        price: current,
+        baseline,
+        movePct: pct,
       });
     }
   } catch (err) {
@@ -160,6 +168,41 @@ export async function detectCrashes(coins: Coin[]): Promise<DetectionResult> {
   let processed = 0;
   let crashes = 0;
   let surges = 0;
+
+  // Per-user thresholds: for each watched coin, find the LOWEST (most sensitive)
+  // threshold across all users watching it. This ensures every user's sensitivity
+  // is respected — if ANY watcher has a low threshold, the alert fires.
+  // Falls back to 0.5% if no user has set a custom threshold.
+  const DEFAULT_THRESHOLD = 0.5;
+
+  // Build a map: asset_id → minimum threshold across all watchers.
+  const thresholdByAsset = new Map<string, number>();
+  try {
+    // Join watchlists with their owners' settings in one query.
+    const watchersWithSettings = await prisma.watchlist.findMany({
+      select: {
+        asset_id: true,
+        user: {
+          select: {
+            setting: {
+              select: { alert_threshold: true },
+            },
+          },
+        },
+      },
+    });
+
+    for (const w of watchersWithSettings) {
+      const userThreshold = w.user.setting?.alert_threshold ?? DEFAULT_THRESHOLD;
+      const current = thresholdByAsset.get(w.asset_id);
+      if (current === undefined || userThreshold < current) {
+        thresholdByAsset.set(w.asset_id, userThreshold);
+      }
+    }
+  } catch (err) {
+    log.error("Failed to fetch per-user thresholds, using default 0.5 for all", { error: err });
+  }
+
 
   for (const coin of coins) {
     const current = coin.price;
@@ -201,10 +244,15 @@ export async function detectCrashes(coins: Coin[]): Promise<DetectionResult> {
       direction: pct >= 0 ? "up" : "down",
     });
 
-    if (pct <= CRASH_THRESHOLD_PCT) {
+    // Look up the most sensitive threshold for this asset (lowest among watchers).
+    const assetThreshold = thresholdByAsset.get(coin.id) ?? DEFAULT_THRESHOLD;
+    const crashThresholdPct = -assetThreshold;
+    const surgeThresholdPct = assetThreshold;
+
+    if (pct <= crashThresholdPct) {
       crashes++;
       await recordAlert(coin, current, baseline, pct, now, "crash");
-    } else if (pct >= SURGE_THRESHOLD_PCT) {
+    } else if (pct >= surgeThresholdPct) {
       surges++;
       await recordAlert(coin, current, baseline, pct, now, "surge");
     }

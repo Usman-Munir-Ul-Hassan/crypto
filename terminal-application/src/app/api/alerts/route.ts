@@ -26,18 +26,25 @@ export async function GET() {
   // Guarded: a DB hiccup logs with context and returns a clean 500 the client's
   // poll loop can shrug off (section 19.1 — log and degrade, never crash).
   try {
-    const watched = await prisma.watchlist.findMany({
-      where: { user_id: session.user.id },
-      select: { asset_id: true },
-    });
-    const ids = watched.map((w) => w.asset_id);
-    if (ids.length === 0) return NextResponse.json({ alerts: [] });
-
-    const rows = await prisma.cryptoAlert.findMany({
-      where: { asset_id: { in: ids } },
-      orderBy: { detected_at: "desc" },
-      take: 50, // most recent 50 — enough for the feed, bounded query cost
-    });
+    const rows = await prisma.$queryRaw<
+      {
+        id: string;
+        asset_id: string;
+        asset_name: string;
+        price_at_drop: number;
+        drop_percentage: number;
+        detected_at: Date;
+      }[]
+    >`
+      SELECT c.id, c.asset_id, c.asset_name, c.price_at_drop, c.drop_percentage, c.detected_at
+      FROM "CryptoAlert" c
+      WHERE c.asset_id IN (
+        SELECT asset_id FROM "Watchlist" WHERE user_id = ${session.user.id}
+      )
+      AND c.detected_at >= NOW() - INTERVAL '7 days'
+      ORDER BY c.detected_at DESC
+      LIMIT 15
+    `;
 
     return NextResponse.json({
       alerts: rows.map((r) => ({

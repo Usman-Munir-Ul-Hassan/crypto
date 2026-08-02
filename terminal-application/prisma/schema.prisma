@@ -20,7 +20,12 @@ model User {
   // false at registration (manual OR Google, via the default) -> tour shows once.
   tutorial_completed Boolean @default(false)
 
+  // Profile avatar as a small base64 data-URL (client resizes to ~192px JPEG
+  // before upload, so this stays ~10-20KB). null -> initials fallback.
+  avatar        String?
+
   watchlists    Watchlist[]
+  setting       SystemSetting?
 }
 
 model Watchlist {
@@ -45,4 +50,12 @@ model CryptoAlert {
 
   @@index([asset_id, detected_at]) //it instantly finds alerts from the last 60 seconds.
   @@index([detected_at])// for finding the latest alerts
+}
+
+model SystemSetting {
+  id              String @id @default(cuid())
+  user_id         String @unique
+  alert_threshold Float  @default(0.5)
+
+  user            User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }

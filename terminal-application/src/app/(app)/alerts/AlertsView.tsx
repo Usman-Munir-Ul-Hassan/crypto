@@ -1,15 +1,69 @@
 "use client";
 
 // Alerts — CLIENT half of the crash + surge feed. Seeded by the server with this
-// operator's alert history, then polls /api/alerts every 5s so new moves the
+// operator's alert history, then polls /api/alerts every 10s so new moves the
 // detector logs appear without a manual refresh. Read-only view: alerts are
 // created by the server-side detector, never from here. The SIGN of
-// drop_percentage is the direction: negative = flash crash, positive = surge.
+// drop_percentage is the direction: negative = price drop, positive = surge.
 // Tactical Terminal spec — token classes only, no raw hex.
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useToast } from "@/app/components/Toaster";
 import ConfirmDialog from "@/app/components/ConfirmDialog";
+
+// Reuse one AudioContext for the lifetime of the page (browsers allow only a
+// limited number of them). Created lazily on first beep so we stay inside the
+// "must be triggered by user gesture" rule — the poll only fires after the page
+// has already rendered and the user has navigated here.
+let _audioCtx: AudioContext | null = null;
+function getAudioCtx(): AudioContext | null {
+  try {
+    if (!_audioCtx || _audioCtx.state === "closed") {
+      const AudioCtxClass = window.AudioContext;
+      if (!AudioCtxClass) return null;
+      _audioCtx = new AudioCtxClass();
+    }
+    return _audioCtx;
+  } catch {
+    return null;
+  }
+}
+
+// Plays a quick two-tone beep.
+// surge = true  → rising pair (positive news)
+// surge = false → falling pair (drop warning, lower frequency)
+function playBeep(surge = false) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+
+  // Resume context if it was suspended (browser autoplay policy).
+  if (ctx.state === "suspended") ctx.resume().catch(() => { });
+
+  const now = ctx.currentTime;
+  // Two tones — spaced 0.15 s apart so it sounds like a double-beep.
+  const tones = surge
+    ? [660, 880]   // ascending: C5 → A5 (positive)
+    : [440, 330];  // descending: A4 → E4 (warning)
+
+  tones.forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, now + i * 0.18);
+
+    gain.gain.setValueAtTime(0, now + i * 0.18);
+    gain.gain.linearRampToValueAtTime(0.12, now + i * 0.18 + 0.01);  // fast attack
+    gain.gain.linearRampToValueAtTime(0, now + i * 0.18 + 0.14);  // smooth decay
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start(now + i * 0.18);
+    osc.stop(now + i * 0.18 + 0.15);
+  });
+}
 
 export type AlertRow = {
   id: string;
@@ -20,12 +74,8 @@ export type AlertRow = {
   detected_at: string; // ISO string
 };
 
-function fmtPrice(n: number): string {
-  const digits = n >= 1 ? 2 : n >= 0.01 ? 4 : 8;
-  return `$${n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
-}
 
-// "3m ago" style relative time — crashes are recent, so relative reads better
+// "3m ago" style relative time — drops are recent, so relative reads better
 // than a full timestamp. Falls back to a date once it's older than a day.
 function fmtAgo(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -69,7 +119,17 @@ export default function AlertsView({ initialAlerts }: { initialAlerts: AlertRow[
         const res = await fetch("/api/alerts");
         if (!res.ok) return; // transient blip — keep the last feed
         const json = (await res.json()) as { alerts: AlertRow[] };
-        if (!cancelledRef.current) setAlerts(json.alerts);
+        if (!cancelledRef.current) {
+          setAlerts((prev) => {
+            const newAlerts = json.alerts.filter((a) => !prev.some((p) => p.id === a.id));
+            if (newAlerts.length > 0) {
+              // Play a surge or drop beep based on the first new alert's direction.
+              const isSurge = newAlerts[0].drop_percentage > 0;
+              playBeep(isSurge);
+            }
+            return json.alerts;
+          });
+        }
       } catch {
         // Network hiccup — ignore, next tick catches up.
       }
@@ -114,123 +174,101 @@ export default function AlertsView({ initialAlerts }: { initialAlerts: AlertRow[
   return (
     <main className="flex-1 p-4 sm:p-6 lg:p-8">
       {/* Page header */}
-      <div className="flex items-center gap-4">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-danger/15 text-lg text-danger">
-          ⚠
-        </span>
-        <div className="min-w-0">
-          <h1 className="font-display text-2xl font-black italic tracking-wide sm:text-3xl">
-            PRICE MOVE ALERTS
-          </h1>
-          <p className="font-mono text-[9px] uppercase tracking-[0.35em] text-muted">
-            {"// Crash & surge feed on watched assets"}
-          </p>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gray-200 text-black text-xl shadow-inner transition-transform duration-300 group-hover:scale-110">
+            ⚠
+          </span>
+          <div className="min-w-0">
+            <h1 className="font-display text-2xl font-black italic tracking-wide sm:text-4xl bg-clip-text text-transparent bg-gradient-to-r from-foreground to-muted">
+              PRICE MOVE ALERTS
+            </h1>
+            <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-muted">
+              {"// Price drop & surge feed on watched assets"}
+            </p>
+          </div>
         </div>
 
-        {/* Clear history — top corner, only useful when there's something to clear */}
+        {/* Clear history */}
         <button
           type="button"
           onClick={() => setConfirmOpen(true)}
           disabled={clearing || alerts.length === 0}
-          className="ml-auto shrink-0 cursor-pointer rounded-md border border-danger/50 bg-danger/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-danger transition hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-40"
+          className="shrink-0 cursor-pointer rounded-lg border border-danger/50 bg-gradient-to-r from-danger/20 to-danger/5 px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.2em] text-danger transition-all hover:bg-danger/20 hover:shadow-[0_0_10px_rgba(255,69,69,0.3)] hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0 disabled:hover:shadow-none"
         >
-          {clearing ? "Clearing…" : "✕ Clear"}
+          {clearing ? "Clearing…" : "✕ Clear History"}
         </button>
       </div>
 
-      {/* Crash vs surge tally — the page's danger/positivity scoreboard */}
-      {alerts.length > 0 && (
-        <div className="mt-6 grid max-w-md grid-cols-2 gap-3">
-          <div className="rounded-xl border border-danger/40 bg-danger/10 p-3">
-            <p className="font-mono text-[8px] uppercase tracking-[0.3em] text-muted">Flash crashes</p>
-            <p className="mt-1 font-display text-2xl font-black text-danger">▾ {crashCount}</p>
-          </div>
-          <div className="rounded-xl border border-primary/40 bg-primary/10 p-3">
-            <p className="font-mono text-[8px] uppercase tracking-[0.3em] text-muted">Price surges</p>
-            <p className="mt-1 font-display text-2xl font-black text-primary">▴ {surgeCount}</p>
-          </div>
+      {/* Drop vs surge tally */}
+      <div className="mt-8 flex gap-4">
+        <div className="flex-1 rounded-2xl border border-primary/40 bg-primary/10 p-5 backdrop-blur-md shadow-[0_0_20px_rgba(43,255,69,0.1)] transition-transform hover:scale-[1.02]">
+          <div className="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-primary/20 blur-2xl"></div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-green-400">Price Surges</p>
+          <p className="mt-2 font-display text-4xl font-black text-green-500 drop-shadow-md">▴ {surgeCount}</p>
         </div>
-      )}
+        <div className="flex-1 rounded-2xl border border-danger/40 bg-danger/10 p-5 backdrop-blur-md shadow-[0_0_20px_rgba(255,69,69,0.1)] transition-transform hover:scale-[1.02]">
+          <div className="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-danger/20 blur-2xl"></div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-red-400">Price Drops</p>
+          <p className="mt-2 font-display text-4xl font-black text-red-500 drop-shadow-md">▾ {crashCount}</p>
+        </div>
+      </div>
 
       {alerts.length === 0 ? (
-        <div className="mt-16 flex flex-col items-center gap-4 text-center">
-          <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-muted">
-            {"// No crashes or surges detected — all watched assets stable"}
+        <div className="mt-20 flex flex-col items-center gap-6 text-center animate-in fade-in slide-in-from-bottom-4 duration-700">
+          <div className="rounded-full bg-surface/50 p-6 shadow-[0_0_30px_rgba(255,255,255,0.03)] backdrop-blur-sm border border-line">
+            <span className="text-4xl text-muted/50">✨</span>
+          </div>
+          <p className="font-mono text-xs uppercase tracking-[0.25em] text-muted">
+            {"// No drops or surges detected — all watched assets stable"}
           </p>
-          <a
+          <Link
             href="/watchlist"
-            className="cursor-pointer rounded-md border border-primary/60 bg-primary/10 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-primary transition hover:bg-primary/20"
+            className="group cursor-pointer rounded-lg border border-primary/40 bg-gradient-to-r from-primary/10 to-primary/5 px-6 py-3 font-mono text-[10px] uppercase tracking-[0.2em] text-primary transition-all hover:border-primary/80 hover:bg-primary/20 hover:shadow-[0_0_15px_rgba(43,255,69,0.2)]"
           >
-            ★ View Watchlist
-          </a>
+            <span className="inline-block transition-transform group-hover:scale-110">★</span> View Watchlist
+          </Link>
         </div>
       ) : (
-        <div className="mt-6 grid max-h-[calc(100vh-16rem)] grid-cols-1 gap-3 overflow-y-auto pr-1 xl:grid-cols-2">
+        /* Alerts list */
+        <div className="mt-8 w-full grid grid-cols-2 gap-4 overflow-y-auto pr-2">
           {alerts.map((a) => {
-            // Positive % = surge (green/up), negative = crash (red/down).
+            // Positive % = surge (green/up), negative = drop (red/down).
             const surge = a.drop_percentage > 0;
             const active = mounted && isActive(a.detected_at);
             return (
               <div
                 key={a.id}
-                className={`relative overflow-hidden rounded-xl border border-l-4 p-4 ${
-                  surge
-                    ? "border-primary/40 border-l-primary bg-primary/10"
-                    : "border-danger/40 border-l-danger bg-danger/10"
-                }`}
+                className={`relative overflow-hidden rounded-2xl border ${surge ? "border-primary/40 bg-primary/10 text-primary" : "border-danger/40 bg-danger/10 text-danger"} p-5 shadow-lg`}
               >
-                {/* Right-edge glow toward the % — pulls the eye to the number */}
-                <div
-                  className={`pointer-events-none absolute inset-y-0 right-0 w-1/3 bg-gradient-to-l to-transparent ${
-                    surge ? "from-primary/15" : "from-danger/15"
-                  }`}
-                />
-                <div className="relative flex items-center justify-between gap-4">
-                  {/* Direction tile + asset identity */}
-                  <div className="flex min-w-0 items-center gap-3">
+                <span className="absolute top-2 left-2 text-xs font-mono text-white">{mounted ? fmtAgo(a.detected_at) : "…"}</span>
+                <div className="flex items-center justify-between gap-4 pl-2">
+                  <div className="flex min-w-0 items-center gap-4">
                     <span
-                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl ${
-                        surge ? "bg-primary/20 text-primary" : "bg-danger/20 text-danger"
-                      }`}
+                      className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-xl shadow-inner transition-transform duration-300 group-hover:scale-110 ${surge
+                        ? "bg-primary/20 text-green-500" : "bg-danger/20 text-red-500"
+                        }`}
                     >
                       {surge ? "▲" : "▼"}
                     </span>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="truncate font-display text-base font-bold">{a.asset_name}</p>
+                        <p className="truncate font-display text-lg font-bold tracking-tight text-white">{a.asset_name}</p>
                         {active && (
                           <span
-                            className={`flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-[0.15em] text-background ${
-                              surge ? "bg-primary" : "bg-danger"
-                            }`}
+                            className={`flex shrink-0 items-center gap-1.5 rounded px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.15em] ${surge ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}
                           >
-                            <span className="h-1 w-1 animate-ping rounded-full bg-background" />
+                            <span className={`h-1.5 w-1.5 animate-ping rounded-full ${surge ? "bg-primary" : "bg-danger"}`} />
                             Live
                           </span>
                         )}
                       </div>
-                      <p
-                        className={`mt-1 font-mono text-[9px] font-bold uppercase tracking-[0.25em] ${
-                          surge ? "text-primary" : "text-danger"
-                        }`}
-                      >
-                        {surge ? "Price surge" : "Flash crash"}
-                      </p>
-                      <p className="mt-0.5 font-mono text-[8px] uppercase tracking-[0.2em] text-muted">
-                        {mounted ? fmtAgo(a.detected_at) : "…"} · @ {fmtPrice(a.price_at_drop)}
-                      </p>
+                      <p className={`mt-1 font-mono text-[9px] font-bold uppercase tracking-[0.25em] ${surge ? "text-green-500" : "text-red-500"}`}>{surge ? "Price surge" : "Price drop"}</p>
                     </div>
                   </div>
-
-                  {/* The number that matters — big, signed, colored */}
                   <div className="shrink-0 text-right">
-                    <p className={`font-mono text-2xl font-black ${surge ? "text-primary" : "text-danger"}`}>
-                      {surge ? "+" : "−"}
-                      {Math.abs(a.drop_percentage).toFixed(2)}%
-                    </p>
-                    <p className="font-mono text-[8px] uppercase tracking-[0.2em] text-muted">
-                      {surge ? "▴ since last scan" : "▾ since last scan"}
-                    </p>
+                    <p className={`font-mono text-3xl font-black drop-shadow-sm ${surge ? "text-green-500" : "text-red-500"}`}>{surge ? "+" : "−"}{Math.abs(a.drop_percentage).toFixed(2)}%</p>
+                    <p className="mt-1 font-mono text-[8px] uppercase tracking-[0.2em] text-foreground/70">{surge ? "▴ since last scan" : "▾ since last scan"}</p>
                   </div>
                 </div>
               </div>
@@ -239,8 +277,8 @@ export default function AlertsView({ initialAlerts }: { initialAlerts: AlertRow[
         </div>
       )}
 
-      <p className="mt-6 font-mono text-[8px] uppercase tracking-[0.3em] text-muted">
-        {"// Live feed · detector scans every 15s · one alert per asset per direction per 60s"}
+      <p className="mt-8 border-t border-line/50 pt-4 font-mono text-[8px] uppercase tracking-[0.3em] text-muted/70">
+        {"// Live feed · detector scans every 5s · one alert per asset per direction per 60s"}
       </p>
 
       <ConfirmDialog
@@ -255,3 +293,4 @@ export default function AlertsView({ initialAlerts }: { initialAlerts: AlertRow[
     </main>
   );
 }
+

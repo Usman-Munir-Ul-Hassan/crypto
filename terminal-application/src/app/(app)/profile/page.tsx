@@ -11,6 +11,7 @@ import { operatorName, operatorInitials } from "@/app/lib/user-display";
 import LogoutButton from "@/app/components/LogoutButton";
 import { Icon, type IconName } from "@/app/components/icons";
 import OfflineNotice from "@/app/components/OfflineNotice";
+import AvatarUploader from "./AvatarUploader";
 
 // Isolated so we can borrow its return type below without re-typing the select.
 function getProfileUser(email: string) {
@@ -23,6 +24,7 @@ function getProfileUser(email: string) {
       google_id: true,
       password_hash: true,
       tutorial_completed: true,
+      avatar: true,
       _count: { select: { watchlists: true } },
     },
   });
@@ -135,9 +137,7 @@ export default async function ProfilePage() {
         </div>
         <div className="flex flex-col gap-4 px-5 pb-5 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex items-end gap-4">
-            <span className="-mt-10 flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl border-2 border-background bg-primary/15 font-display text-2xl font-black text-primary ring-1 ring-primary/30">
-              {initials}
-            </span>
+            <AvatarUploader initials={initials} initialAvatar={user.avatar} />
             <div className="min-w-0 pb-1">
               <h1 className="truncate font-display text-2xl font-black italic uppercase tracking-wide sm:text-3xl">
                 {name}

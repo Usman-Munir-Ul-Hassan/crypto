@@ -3,7 +3,7 @@ import { fetchMarkets, fetchGlobal } from "@/app/lib/coingecko";
 
 // GET /api/overview -> { global, coins, status }
 // The dashboard's live market feed. Bundles two public CoinGecko reads into one
-// call so the client polls a single endpoint every 30s:
+// call so the client polls a single endpoint every 15s:
 //   • global — total market cap / 24h volume / 24h change (Market Overview panel)
 //   • coins  — top coins by market cap, sliced to the 2 price cards
 // Public (no auth): whole-market data, not user-specific. The dashboard PAGE is
@@ -12,7 +12,8 @@ import { fetchMarkets, fetchGlobal } from "@/app/lib/coingecko";
 export const dynamic = "force-dynamic"; // never cache — each poll wants a fresh quote
 
 export async function GET() {
-  // Both reads in parallel — worst case is one timeout, not two stacked.
+  // Both feeds come from the ONE shared Lane 2 snapshot (single 30s clock),
+  // so these two awaits cost at most one combined upstream refresh.
   const [markets, globalRes] = await Promise.all([fetchMarkets(), fetchGlobal()]);
 
   // One honest status for the client: ok only if BOTH succeeded, else surface

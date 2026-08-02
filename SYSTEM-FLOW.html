@@ -114,19 +114,20 @@
     <p>
       BITBASH Sentry is a <b>crypto price-surveillance terminal</b>. You browse the top-100 market,
       ⭐-star coins into your watchlist, and a <b>background engine inside the same Next.js server
-      process</b> watches them 24/7: every 15s it pulls prices from CoinGecko, compares each coin
+      process</b> watches them 24/7: every 30s it pulls prices from CoinGecko, compares each coin
       against its <i>last-tick baseline</i>, and fires a <b style="color:var(--red)">FLASH CRASH</b>
-      (≤ −2%) or <b style="color:var(--green)">PRICE SURGE</b> (≥ +2%) alert into PostgreSQL.
+      (≤ −0.1%) or <b style="color:var(--green)">PRICE SURGE</b> (≥ +0.1%) alert into PostgreSQL (spec value ±2%),
+      then <b>emails every user watching that coin</b> (nodemailer over SMTP — mailer.ts, optional via .env).
+      Unknown URLs (e.g. <code>/dashboardss</code>) land on a themed 404 page (<code>src/app/not-found.tsx</code>).
       Browsers never call CoinGecko — they poll the server's RAM cache, so 100 open tabs cost zero
       extra external calls.
     </p>
     <div class="chips">
       <div class="chip c-blue"><b>CLIENT</b><span>MarketTable · WatchlistView · DashboardLive · AlertsView · login/register + shared UI (Toaster, ConfirmDialog, ConnectionStatus, OfflineNotice)</span></div>
-      <div class="chip c-green"><b>API / ROUTES</b><span>9 handlers in <code>src/app/api/</code> + 6 SSR pages · guarded by middleware.ts</span></div>
-      <div class="chip c-amber"><b>BUSINESS LOGIC</b><span><code>src/app/lib/</code>: poller.ts · detector.ts · coingecko.ts · auth.ts · logger.ts + instrumentation.ts boot hook</span></div>
+      <div class="chip c-green"><b>API / ROUTES</b><span>10 handlers in <code>src/app/api/</code> (incl. avatar) + 6 SSR pages · guarded by middleware.ts</span></div>
+      <div class="chip c-amber"><b>BUSINESS LOGIC</b><span><code>src/app/lib/</code>: poller.ts · detector.ts · coingecko.ts · auth.ts · logger.ts · mailer.ts (alert emails) + instrumentation.ts boot hook</span></div>
       <div class="chip c-violet"><b>DATA LAYER</b><span>cache.ts (globalThis RAM) · prisma.ts → Supabase Postgres · daily disk logs</span></div>
       <div class="chip c-orange"><b>EXTERNAL</b><span>CoinGecko free API · Google OAuth — no queues, no workers, one Node process</span></div>
-      <div class="chip c-red"><b>NOT USED</b><span><code>surveillance-engine/</code> at repo root = legacy scaffold, never imported</span></div>
     </div>
   </div>
 
@@ -154,73 +155,82 @@
     <!-- rule: thin arrow UP = "asks" (request) · thick arrow DOWN = data coming back -->
 
     <!-- CoinGecko -->
-    <g class="box" onclick="goKF('kf-extcg')" data-tip="api.coingecko.com/api/v3 — /coins/markets (top-100) · ?ids= (watched coins) · /global&#10;free tier ~5-15 calls/min/IP · every call has an 8s AbortController timeout">
+    <g class="box" onclick="goKF('kf-extcg')" data-tip="api.coingecko.com/api/v3 — /coins/markets (top-100) · ?ids= (watched coins)&#10;free tier ~5-15 calls/min/IP · every call has an 8s AbortController timeout">
       <rect x="330" y="28" width="340" height="78" rx="10" fill="#151a24" stroke="#ff9d5c" stroke-width="1.5"/>
       <text x="500" y="60" text-anchor="middle" class="bx-t" fill="#ff9d5c">🌐 CoinGecko API</text>
       <text x="500" y="84" text-anchor="middle" class="bx-d">source of truth — the ONLY external price feed</text></g>
 
     <!-- poller <-> CoinGecko: request up, data down -->
-    <path d="M470,166 L470,110" stroke="#f2b544" stroke-width="1.2" fill="none" marker-end="url(#ma)" data-tip="the POLLER initiates: HTTPS GET /coins/markets (+ ?ids= batch) — every 15s tick"/>
-    <text x="120" y="142" class="al" data-tip="thin up arrow = who is ASKING">② poller asks — every 15s →</text>
+    <path d="M470,166 L470,110" stroke="#f2b544" stroke-width="1.2" fill="none" marker-end="url(#ma)" data-tip="the POLLER initiates: HTTPS GET /coins/markets (+ ?ids= batch) — every 30s tick"/>
+    <text x="120" y="142" class="al" data-tip="thin up arrow = who is ASKING">② poller asks — every 30s →</text>
     <path d="M530,110 L530,166" stroke="#ff9d5c" stroke-width="1.8" fill="none" marker-end="url(#mo)" data-tip="response: fresh prices JSON · 8s timeout&#10;429 ⇒ 'rate_limit' · fail ⇒ poller keeps the last cache"/>
     <text x="545" y="142" class="al">← prices JSON back (8s timeout)</text>
 
     <!-- poller -->
-    <g class="box" onclick="goKF('kf-poller')" data-tip="startPoller() runs ONCE at server boot (instrumentation.ts).&#10;Every 15_000ms: ① read watched ids (DB) → ② fetch prices (CoinGecko) → ③ detectCrashes() → ④ setCache().&#10;Any step failing ⇒ tick logs the error, the old cache keeps being served.">
+    <g class="box" onclick="goKF('kf-poller')" data-tip="startPoller() runs ONCE at server boot (instrumentation.ts).&#10;Every 30_000ms: ① read watched ids (DB) → ② fetch prices (CoinGecko) → ③ detectCrashes() → ④ setCache().&#10;Any step failing ⇒ tick logs the error, the old cache keeps being served.">
       <rect x="310" y="170" width="380" height="96" rx="10" fill="#251e10" stroke="#f2b544" stroke-width="1.5"/>
-      <text x="500" y="198" text-anchor="middle" class="bx-t" fill="#f2b544">⚙ poller.ts — the 15-second heartbeat</text>
+      <text x="500" y="198" text-anchor="middle" class="bx-t" fill="#f2b544">⚙ poller.ts — the 30-second heartbeat</text>
       <text x="500" y="220" text-anchor="middle" class="bx-d">booted once by instrumentation.ts · runs forever</text>
       <text x="500" y="240" text-anchor="middle" class="bx-d">tick: ① read ids → ② fetch → ③ detect (detector.ts) → ④ cache</text></g>
 
     <!-- ① poller asks DB who is starred (right-angle line along the right margin) -->
-    <path d="M940,415 L975,415 L975,208 L694,208" stroke="#2bd576" stroke-width="1.3" fill="none" marker-end="url(#mg)" data-tip="① SELECT DISTINCT asset_id FROM Watchlist — at the START of every tick&#10;a coin you just starred is picked up within 15s"/>
+    <path d="M940,415 L975,415 L975,208 L694,208" stroke="#2bd576" stroke-width="1.3" fill="none" marker-end="url(#mg)" data-tip="① SELECT DISTINCT asset_id FROM Watchlist — at the START of every tick&#10;a coin you just starred is picked up within 30s"/>
     <text x="712" y="200" class="al" data-tip="the ONLY thing the poller reads from the DB">① asks DB: which coins are starred? — every tick</text>
 
     <!-- poller writes: cache (left) and DB (right), right-angle lines -->
-    <path d="M420,266 L420,318 L260,318 L260,376" stroke="#35c9e8" stroke-width="1.6" fill="none" marker-end="url(#mc)" data-tip="④ setCache(coins, crashes, surges) — WHOLESALE replace of __priceStore + updatedAt = Date.now()&#10;happens EVERY tick, crash or no crash"/>
-    <text x="60" y="308" class="al" data-tip="write #1 — every 15s, no exceptions">④ writes cache — every 15s (full replace)</text>
-    <path d="M580,266 L580,318 L740,318 L740,376" stroke="#ff5c72" stroke-width="1.6" fill="none" marker-end="url(#mr)" data-tip="③ prisma.cryptoAlert.create — ONLY when |move| ≥ 2% (test ±0.01%)&#10;AND the 60s cooldown passed AND no duplicate row already in the DB&#10;most ticks write NOTHING here"/>
-    <text x="596" y="308" class="al" data-tip="write #2 — rare, guarded, permanent">③ writes alert — only on ±2% breach</text>
+    <path d="M420,266 L420,318 L140,318 L140,376" stroke="#35c9e8" stroke-width="1.6" fill="none" marker-end="url(#mc)" data-tip="④ setCache(coins, crashes, surges) — WHOLESALE replace of __priceStore&#10;each coin gets prevPrice = its price from the outgoing snapshot (LiveCoin)&#10;prevUpdatedAt = old updatedAt · updatedAt = Date.now() — happens EVERY tick"/>
+    <text x="60" y="308" class="al" data-tip="write #1 — every 30s, no exceptions">④ writes cache — every 30s (full replace)</text>
+    <path d="M580,266 L580,318 L740,318 L740,376" stroke="#ff5c72" stroke-width="1.6" fill="none" marker-end="url(#mr)" data-tip="③ prisma.cryptoAlert.create — ONLY when |move| ≥ 0.1% (spec ±2%)&#10;AND the 60s cooldown passed AND no duplicate row already in the DB&#10;most ticks write NOTHING here&#10;on a NEW row → mailer.ts emails every watcher of the asset (fire-and-forget)"/>
+    <text x="596" y="308" class="al" data-tip="write #2 — rare, guarded, permanent">③ writes alert — only on ±0.1% breach</text>
+    <path d="M440,266 L440,376" stroke="#35c9e8" stroke-width="1.4" stroke-dasharray="6 5" fill="none" marker-end="url(#mc)" data-tip="② each tick calls fetchMarkets() — fresh snapshot ⇒ pure read (parity source for watched coins).&#10;__lane2Snap older than 30s ⇒ that same call REFILLS it (/coins/markets + /global pulled in parallel).&#10;This is what keeps Lane 2 warm even with ZERO browsers open."/>
+    <text x="448" y="350" class="al" data-tip="dashed = refill only when the 30s TTL expired">② reads · refills if stale ┄</text>
 
-    <!-- storage row -->
-    <g class="box" onclick="goKF('kf-cache')" data-tip="cache.ts — plain JS Maps/objects hung on globalThis.&#10;Reading it is a function call: no network, no SQL, ~0ms.&#10;Restart the server ⇒ ALL of this is gone (by design — the poller refills it in ≤15s).">
-      <rect x="40" y="380" width="420" height="150" rx="10" fill="#10222e" stroke="#35c9e8" stroke-width="1.5"/>
-      <text x="60" y="408" class="bx-t" fill="#35c9e8">⚡ MEMORY CACHE — cache.ts (RAM, globalThis)</text>
-      <text x="60" y="434" class="bx-d">__priceStore → REPLACED every 15s by the poller</text>
-      <text x="60" y="452" class="bx-d">__marketsSnap → refilled only when older than 15s</text>
-      <text x="60" y="470" class="bx-d">__globalSnap 30s TTL · baselines · 60s cooldowns</text>
-      <text x="60" y="496" class="bx-d">⚠ wiped on restart — never holds anything precious</text></g>
+    <!-- storage row: TWO separate RAM caches (push vs pull) + the permanent DB -->
+    <g class="box" onclick="goKF('kf-cache')" data-tip="cache.ts — Lane 1's PUSH cache, hung on globalThis.&#10;The POLLER writes it every 30s whether anyone is watching or not (the detector must run 24/7).&#10;Reading it is a function call: no network, no SQL, ~0ms.&#10;Restart the server ⇒ gone (by design — the poller refills it in ≤30s).">
+      <rect x="40" y="380" width="200" height="150" rx="10" fill="#10222e" stroke="#35c9e8" stroke-width="1.5"/>
+      <text x="52" y="408" class="bx-t" fill="#35c9e8">⚡ LANE 1 — cache.ts</text>
+      <text x="52" y="434" class="bx-d">__priceStore → watched coins only</text>
+      <text x="52" y="452" class="bx-d">PUSH: poller REPLACES it every 30s</text>
+      <text x="52" y="470" class="bx-d">prevPrice · alerts · surges</text>
+      <text x="52" y="496" class="bx-d">⚠ wiped on restart</text></g>
+    <g class="box" onclick="goKF('kf-coingecko')" data-tip="coingecko.ts — Lane 2's PULL micro-cache, hung on globalThis.&#10;Nobody browsing ⇒ zero CoinGecko calls. First reader after 30s triggers ONE refresh (/coins/markets + /global in parallel); everyone else piggybacks.&#10;Upstream down ⇒ last good snapshot served; a 429 opens a 60s circuit breaker (zero calls while cooling) and stale:true only flags data older than 90s.">
+      <rect x="260" y="380" width="200" height="150" rx="10" fill="#10222e" stroke="#35c9e8" stroke-width="1.5"/>
+      <text x="272" y="408" class="bx-t" fill="#35c9e8">⚡ LANE 2 — coingecko.ts</text>
+      <text x="272" y="434" class="bx-d">__lane2Snap → top-100 + /global totals</text>
+      <text x="272" y="452" class="bx-d">PULL: refilled only when &gt;30s old</text>
+      <text x="272" y="470" class="bx-d">in-flight dedup · 60s 429 breaker</text>
+      <text x="272" y="496" class="bx-d">⚠ wiped on restart</text></g>
     <g class="box" onclick="goKF('kf-prisma')" data-tip="Supabase PostgreSQL via Prisma (remote, pooled :6543).&#10;Three tables — each written on a DIFFERENT trigger:&#10;alert = price event · watchlist = user click · user = signup.">
       <rect x="520" y="380" width="420" height="150" rx="10" fill="#1b1430" stroke="#a879ff" stroke-width="1.5"/>
       <text x="540" y="408" class="bx-t" fill="#a879ff">🗄 POSTGRESQL — Supabase via Prisma (PERMANENT)</text>
       <text x="540" y="434" class="bx-d">CryptoAlert → written only when a threshold breaks</text>
       <text x="540" y="452" class="bx-d">Watchlist → written the instant you ⭐ a coin</text>
-      <text x="540" y="470" class="bx-d">User → written at signup / first Google login</text>
+      <text x="540" y="470" class="bx-d">User → signup / first Google login · avatar = base64 data-URL</text>
       <text x="540" y="496" class="bx-d">✔ survives restarts — the system's long-term memory</text></g>
 
     <!-- storage -> API routes (each API sits DIRECTLY under its store) -->
-    <path d="M180,530 L180,596" stroke="#35c9e8" stroke-width="1.6" fill="none" marker-end="url(#mc)" data-tip="getCache() — a function call into RAM. This is why /api/prices can be hammered every 5s by every tab for free."/>
+    <path d="M180,530 L180,596" stroke="#35c9e8" stroke-width="1.6" fill="none" marker-end="url(#mc)" data-tip="getCache() — a function call into RAM. This is why /api/prices can be hammered every 10s by every tab for free."/>
     <text x="192" y="566" class="al">RAM read — instant, 0 SQL</text>
-    <path d="M400,530 L400,556 L500,556 L500,596" stroke="#35c9e8" stroke-width="1.6" fill="none" marker-end="url(#mc)" data-tip="fetchMarkets() serves __marketsSnap while it is ≤15s old — most requests never leave the process"/>
-    <text x="408" y="548" class="al">RAM read</text>
+    <path d="M400,530 L400,596" stroke="#35c9e8" stroke-width="1.6" fill="none" marker-end="url(#mc)" data-tip="fetchMarkets() serves __lane2Snap while it is ≤30s old — most requests never leave the process"/>
+    <text x="350" y="566" class="al">RAM read</text>
     <path d="M820,530 L820,596" stroke="#2bd576" stroke-width="1.6" fill="none" marker-end="url(#mg)" data-tip="🔒 watchlist.findMany(user_id) → cryptoAlert.findMany({ asset_id IN yours, take: 50, desc })&#10;a real SQL round-trip on every request — alerts must survive restarts, so no RAM shortcut"/>
     <text x="832" y="566" class="al">SQL SELECT — every request</text>
 
-    <!-- markets refill stub: only when stale -->
-    <path d="M600,596 L600,552" stroke="#ff9d5c" stroke-width="1.4" stroke-dasharray="6 5" fill="none" marker-end="url(#mo)" data-tip="ONLY when __marketsSnap is older than 15s: /api/markets makes ONE call up to CoinGecko and refills the cache for ALL users.&#10;Upstream down + old snapshot exists ⇒ served with stale:true instead of an error."/>
-    <text x="608" y="572" class="al" data-tip="dashed = does NOT happen on every request">stale? ONE call up to CoinGecko ┄</text>
+    <!-- lane 2 refill stub: only when stale -->
+    <path d="M440,596 L440,534" stroke="#ff9d5c" stroke-width="1.4" stroke-dasharray="6 5" fill="none" marker-end="url(#mo)" data-tip="ONLY when __lane2Snap is older than 30s: /coins/markets + /global (parallel) refill the cache for ALL users.&#10;Upstream down + old snapshot exists ⇒ served with stale:true instead of an error."/>
+    <text x="448" y="572" class="al" data-tip="dashed = does NOT happen on every request">stale? ONE call up to CoinGecko ┄</text>
 
     <!-- API routes -->
-    <g class="box" onclick="goKF('kf-readapis')" data-tip="GET /api/prices → { data: Coin[], alerts: string[], surges: string[], updatedAt: epoch-ms }&#10;zero DB, zero CoinGecko — a pure cache read">
+    <g class="box" onclick="goKF('kf-readapis')" data-tip="GET /api/prices → { data: LiveCoin[] (each with prevPrice), alerts, surges, updatedAt, prevUpdatedAt }&#10;zero DB, zero CoinGecko — a pure cache read">
       <rect x="40" y="600" width="280" height="110" rx="10" fill="#122417" stroke="#2bd576" stroke-width="1.5"/>
       <text x="180" y="630" text-anchor="middle" class="bx-t" fill="#2bd576">/api/prices</text>
       <text x="180" y="654" text-anchor="middle" class="bx-d">reads CACHE ONLY</text>
       <text x="180" y="672" text-anchor="middle" class="bx-d">never DB · never CoinGecko</text>
-      <text x="180" y="690" text-anchor="middle" class="bx-d">→ { data, alerts, surges, updatedAt }</text></g>
-    <g class="box" onclick="goKF('kf-readapis')" data-tip="GET /api/markets → { coins: Coin[100], status: 'ok'|'rate_limit'|'down'|'network', stale: boolean }">
+      <text x="180" y="690" text-anchor="middle" class="bx-d">→ { data(+prevPrice), alerts, surges, updatedAt, prevUpdatedAt }</text></g>
+    <g class="box" onclick="goKF('kf-readapis')" data-tip="GET /api/markets → { coins: LiveCoin[100] (each with prevPrice), status: 'ok'|'rate_limit'|'down'|'network', stale: boolean }&#10;Delta column = (price − prevPrice) / prevPrice × 100 — same last-tick move as the watchlist">
       <rect x="360" y="600" width="280" height="110" rx="10" fill="#122417" stroke="#2bd576" stroke-width="1.5"/>
       <text x="500" y="630" text-anchor="middle" class="bx-t" fill="#2bd576">/api/markets</text>
-      <text x="500" y="654" text-anchor="middle" class="bx-d">reads RAM micro-cache (15s TTL)</text>
+      <text x="500" y="654" text-anchor="middle" class="bx-d">reads RAM micro-cache (30s TTL)</text>
       <text x="500" y="672" text-anchor="middle" class="bx-d">stale ⇒ ONE refill for everyone</text>
       <text x="500" y="690" text-anchor="middle" class="bx-d">→ { coins, status, stale }</text></g>
     <g class="box" onclick="goKF('kf-alertsapi')" data-tip="🔒 GET /api/alerts → AlertRow[≤50] scoped to YOUR watched coins&#10;🔒 DELETE /api/alerts → { cleared: n } — no session ⇒ 401 JSON">
@@ -231,16 +241,16 @@
       <text x="820" y="690" text-anchor="middle" class="bx-d">→ AlertRow[]</text></g>
 
     <!-- browser <-> APIs: request up (thin), JSON down (thick), straight pairs -->
-    <path d="M168,776 L168,714" stroke="#5b9dff" stroke-width="1.2" fill="none" marker-end="url(#mb)" data-tip="WatchlistView: fetch('/api/prices') — setInterval every 5_000ms"/>
-    <text x="96" y="746" class="al">GET · 5s</text>
-    <path d="M192,710 L192,772" stroke="#5b9dff" stroke-width="1.8" fill="none" marker-end="url(#mb)" data-tip="JSON back: { data, alerts, surges, updatedAt } → cards re-render"/>
+    <path d="M168,776 L168,714" stroke="#5b9dff" stroke-width="1.2" fill="none" marker-end="url(#mb)" data-tip="WatchlistView: fetch('/api/prices') — setInterval every 10_000ms"/>
+    <text x="96" y="746" class="al">GET · 10s</text>
+    <path d="M192,710 L192,772" stroke="#5b9dff" stroke-width="1.8" fill="none" marker-end="url(#mb)" data-tip="JSON back: { data(+prevPrice), alerts, surges, updatedAt, prevUpdatedAt } → cards re-render&#10;card delta = (price − prevPrice) / prevPrice × 100 — same formula as the detector"/>
     <text x="200" y="746" class="al">JSON ↓</text>
-    <path d="M488,776 L488,714" stroke="#5b9dff" stroke-width="1.2" fill="none" marker-end="url(#mb)" data-tip="MarketTable + Dashboard overview: fetch('/api/markets' / '/api/overview') — every 15_000ms"/>
-    <text x="414" y="746" class="al">GET · 15s</text>
-    <path d="M512,710 L512,772" stroke="#5b9dff" stroke-width="1.8" fill="none" marker-end="url(#mb)" data-tip="JSON back: { coins, status, stale } → table re-renders"/>
+    <path d="M488,776 L488,714" stroke="#5b9dff" stroke-width="1.2" fill="none" marker-end="url(#mb)" data-tip="MarketTable: fetch('/api/markets') — every 10_000ms (matches the watchlist's browser refresh; reads the shared snapshot the poller keeps warm, so no extra CoinGecko calls). Dashboard overview: fetch('/api/overview') — every 15_000ms."/>
+    <text x="414" y="746" class="al">GET · 10s</text>
+    <path d="M512,710 L512,772" stroke="#5b9dff" stroke-width="1.8" fill="none" marker-end="url(#mb)" data-tip="JSON back: { coins(+prevPrice), status, stale } → table re-renders&#10;Delta = (price − prevPrice) / prevPrice × 100, identical to the watchlist cards"/>
     <text x="520" y="746" class="al">JSON ↓</text>
-    <path d="M808,776 L808,714" stroke="#5b9dff" stroke-width="1.2" fill="none" marker-end="url(#mb)" data-tip="🔒 AlertsView + Dashboard System-Alerts panel: fetch('/api/alerts') — every 5_000ms"/>
-    <text x="724" y="746" class="al">GET · 5s 🔒</text>
+    <path d="M808,776 L808,714" stroke="#5b9dff" stroke-width="1.2" fill="none" marker-end="url(#mb)" data-tip="🔒 AlertsView + Dashboard System-Alerts panel: fetch('/api/alerts') — every 10_000ms"/>
+    <text x="724" y="746" class="al">GET · 10s 🔒</text>
     <path d="M832,710 L832,772" stroke="#5b9dff" stroke-width="1.8" fill="none" marker-end="url(#mb)" data-tip="JSON back: AlertRow[] → alert feed re-renders"/>
     <text x="840" y="746" class="al">JSON ↓</text>
 
@@ -248,7 +258,7 @@
     <g class="box" onclick="goKF('kf-watchlist')" data-tip="client components own the polling timers (setInterval + fetch)&#10;star/un-star is OPTIMISTIC — flips instantly, rolls back with a red toast on failure">
       <rect x="40" y="780" width="880" height="110" rx="10" fill="#111d33" stroke="#5b9dff" stroke-width="1.5"/>
       <text x="480" y="810" text-anchor="middle" class="bx-t" fill="#5b9dff">🖥 BROWSER — client components</text>
-      <text x="480" y="836" text-anchor="middle" class="bx-d">WatchlistView 5s · MarketTable 15s · DashboardLive 15s + 5s · AlertsView 5s</text>
+      <text x="480" y="836" text-anchor="middle" class="bx-d">WatchlistView 10s · MarketTable 10s · DashboardLive 15s + 10s · AlertsView 10s · Sidebar dot 10s</text>
       <text x="480" y="866" text-anchor="middle" class="bx-d">⭐ clicking a star = POST /api/watchlist — the arrow on the right →</text></g>
 
     <!-- browser writes the watchlist (right margin, up into the DB) -->
@@ -268,7 +278,7 @@
     <span><span class="ln"></span>thin ↑ = who ASKS · thick ↓ = data coming back · the browser always initiates (polling — no server push)</span>
     <span><span class="ln ld"></span>dashed = only when stale (TTL expired)</span>
     <span>🔒 = requires auth (JWT cookie)</span>
-    <span><i style="background:rgba(53,201,232,.5)"></i>RAM — rewritten every 15s · wiped on restart</span>
+    <span><i style="background:rgba(53,201,232,.5)"></i>RAM — rewritten every 30s · wiped on restart</span>
     <span><i style="background:rgba(168,121,255,.5)"></i>PostgreSQL — permanent · written only on breach / ⭐ / signup</span>
     <span><i style="background:rgba(255,157,92,.5)"></i>external network (CoinGecko)</span>
   </div>
@@ -309,13 +319,13 @@
         <span class="edge"><b>EDGE — malformed body:</b> <code>req.json()</code> throws on bad JSON → caught → clean <code>400 {error:"Invalid JSON body"}</code>. Missing/blank <code>asset_id</code> or <code>name</code> → 400. No 500 stack traces from user input.</span></li>
       <li><code>prisma.watchlist.upsert()</code> on the <code>@@unique([user_id, asset_id])</code> pair.
         <span class="edge ok"><b>EDGE — double-click / retry after timeout:</b> the second write hits <code>update:{}</code> — a harmless no-op. Without upsert this would be a P2002 crash on every double-star.</span></li>
-      <li><b>Point zero:</b> one-off <code>fetchWatchlistPrices([asset_id])</code> → <span class="file">detector.ts → seedBaseline(asset_id, price)</span> so the detector can compare on the <i>very next</i> 15s tick.
+      <li><b>Point zero:</b> one-off <code>fetchWatchlistPrices([asset_id])</code> → <span class="file">detector.ts → seedBaseline(asset_id, price)</span> so the detector can compare on the <i>very next</i> 30s tick.
         <span class="edge ok"><b>EDGE — seed fails</b> (CoinGecko down): logged, swallowed — the star STILL succeeds; the poller seeds the baseline on its next tick instead.</span>
         <span class="edge ok"><b>EDGE — coin already tracked:</b> <code>seedBaseline</code> returns early if a baseline exists. Baselines are GLOBAL (keyed by asset_id) — a second user starring Bitcoin must not reset a live baseline mid-window and mask an in-progress crash. Also refuses <code>price ≤ 0</code> — bad data never poisons a baseline.</span></li>
       <li><code>{success:true}</code> → green toast via <span class="file">Toaster.tsx</span>: <i>"Bitcoin added to watchlist"</i>.</li>
-      <li>≤15s later: <span class="file">poller.ts → getCoinsToTrack()</span> re-reads the table (<code>distinct</code> — 50 users watching bitcoin = 1 id) and the coin joins the surveillance set. No events, no queue — the shared table IS the contract.</li>
-      <li><code>/watchlist</code> shows it: SSR merges Postgres rows with <code>getCache()</code>; <span class="file">WatchlistView.tsx</span> keeps it live at 5s.
-        <span class="edge ok"><b>EDGE — first 15s gap:</b> if the poller hasn't ticked yet, SSR builds a placeholder card (name from DB, price 0) that the 5s poll fills — the page never blocks waiting for a price.</span></li>
+      <li>≤30s later: <span class="file">poller.ts → getCoinsToTrack()</span> re-reads the table (<code>distinct</code> — 50 users watching bitcoin = 1 id) and the coin joins the surveillance set. No events, no queue — the shared table IS the contract.</li>
+      <li><code>/watchlist</code> shows it: SSR merges Postgres rows with <code>getCache()</code>; <span class="file">WatchlistView.tsx</span> keeps it live at 10s.
+        <span class="edge ok"><b>EDGE — first 30s gap:</b> if the poller hasn't ticked yet, SSR builds a placeholder card (name from DB, price 0) that the 10s poll fills — the page never blocks waiting for a price.</span></li>
     </ol>
   </div>
 
@@ -328,8 +338,8 @@
       <pre><span class="mt">// for EVERY coin in the tick's snapshot:</span>
 movePct = ((currentPrice − baselinePrice) / baselinePrice) × 100
 
-<span class="rd">FLASH CRASH</span>  if movePct ≤ CRASH_THRESHOLD_PCT   <span class="mt">// spec −2.0 · TEST MODE −0.01</span>
-<span class="hl">PRICE SURGE</span>  if movePct ≥ SURGE_THRESHOLD_PCT   <span class="mt">// spec +2.0 · TEST MODE +0.01</span>
+<span class="rd">FLASH CRASH</span>  if movePct ≤ CRASH_THRESHOLD_PCT   <span class="mt">// current −0.1 · spec −2.0</span>
+<span class="hl">PRICE SURGE</span>  if movePct ≥ SURGE_THRESHOLD_PCT   <span class="mt">// current +0.1 · spec +2.0</span>
 
 <span class="mt">// afterwards, ALWAYS (alert or not):</span>
 baselinePrice ← currentPrice   <span class="mt">// this tick becomes next tick's yardstick</span></pre>
@@ -338,7 +348,7 @@ baselinePrice ← currentPrice   <span class="mt">// this tick becomes next tick
 −2.8 ≤ −2.0  →  FLASH CRASH
 INSERT CryptoAlert { asset_id:'pepe', price_at_drop:0.00000972, drop_percentage:<span class="rd">−2.8</span> }
 baseline['pepe'] ← 0.00000972   <span class="mt">// a further −2% from HERE fires again after cooldown</span></pre>
-      <p style="font-size:12.5px;color:var(--muted);margin:0 0 6px"><b>Why baseline resets every tick:</b> the formula measures <i>tick-over-tick velocity</i> (a ~15s window), not distance from a 24h open. A slow bleed of −0.3% per tick never alerts — only a <i>sudden</i> move inside one window does. That's what makes it a <i>flash</i>-crash detector.</p>
+      <p style="font-size:12.5px;color:var(--muted);margin:0 0 6px"><b>Why baseline resets every tick:</b> the formula measures <i>tick-over-tick velocity</i> (a ~30s window), not distance from a 24h open. A slow bleed of −0.3% per tick never alerts — only a <i>sudden</i> move inside one window does. That's what makes it a <i>flash</i>-crash detector.</p>
       <ul class="guards">
         <li><b>No baseline yet</b> (first time seen) → seed it and skip comparison — never compare against nothing.</li>
         <li><b>price ≤ 0 or missing</b> → coin skipped entirely; garbage data can't fire alerts or poison baselines.</li>
@@ -351,13 +361,13 @@ baseline['pepe'] ← 0.00000972   <span class="mt">// a further −2% from HERE 
 
     <ol class="steps">
       <li><b>Boot (once):</b> <span class="file">instrumentation.ts → register()</span> — only when <code>NEXT_RUNTIME === "nodejs"</code> — calls <code>startPoller()</code>. <code>globalThis.__pollerStarted</code> guard: dev HMR reloads modules but never spawns a second timer.</li>
-      <li><b>Tick (every 15s):</b> <span class="file">poller.ts → pollOnce()</span> → <code>SELECT DISTINCT asset_id FROM Watchlist</code>.
+      <li><b>Tick (every 30s):</b> <span class="file">poller.ts → pollOnce()</span> → <code>SELECT DISTINCT asset_id FROM Watchlist</code>.
         <span class="edge ok"><b>EDGE — empty watchlists:</b> zero ids → tick exits immediately. No users watching = zero CoinGecko spend.</span></li>
       <li><b>Prices, parity-first:</b> coins inside the top-100 are lifted from the SAME <code>fetchMarkets()</code> snapshot the /market table serves (a coin can never show two prices on two pages); only coins <i>outside</i> the top-100 get a direct <code>?ids=</code> batch (≤100 ids per call).</li>
       <li><span class="file">detector.ts → detectCrashes(coins)</span> — the formula box above, per coin, both directions.</li>
       <li>Threshold breached + cooldown clear + no recent DB duplicate → <code>prisma.cryptoAlert.create()</code> with <b>sign-encoded</b> <code>drop_percentage</code> (− crash, + surge) → cooldown timestamp updated → logged to <span class="file">logs/app-*.log</span>.</li>
-      <li><span class="file">cache.ts → setCache(coins, crashes, surges)</span> — wholesale replace of <code>__priceStore</code> with fresh <code>updatedAt</code>. Un-starred coins simply aren't in the new array — no cleanup code needed.</li>
-      <li><b>Browsers find out by polling</b> (no push/websocket): within 5s <span class="file">WatchlistView</span> paints the card red/green with a pulse, and <span class="file">AlertsView</span> / <span class="file">DashboardLive</span> pick the row up from <code>GET /api/alerts</code>. Worst-case end-to-end latency ≈ 15s (tick) + 5s (poll).</li>
+      <li><span class="file">cache.ts → setCache(coins, crashes, surges)</span> — wholesale replace of <code>__priceStore</code>. Each incoming coin is stamped with <code>prevPrice</code> (its price from the outgoing snapshot), <code>prevUpdatedAt</code> keeps the old write time, <code>updatedAt = Date.now()</code>. Un-starred coins simply aren't in the new array — no cleanup code needed.</li>
+      <li><b>Browsers find out by polling</b> (no push/websocket): within 10s <span class="file">WatchlistView</span> paints the card red/green with a pulse — and shows the tick itself: <code>prev price → new price</code> with the measured tick gap (<code>updatedAt − prevUpdatedAt</code>) and fetch time, plus a delta computed with the same <code>(current − prev) / prev × 100</code> formula. <span class="file">AlertsView</span> / <span class="file">DashboardLive</span> pick the row up from <code>GET /api/alerts</code>. Worst-case end-to-end latency ≈ 30s (tick) + 10s (poll).</li>
     </ol>
   </div>
 
@@ -367,28 +377,27 @@ baseline['pepe'] ← 0.00000972   <span class="mt">// a further −2% from HERE 
     <tr><th style="width:32%">File (terminal-application/src/…)</th><th>Responsibility</th><th style="width:26%">Talks to</th></tr>
     <tr id="kf-instr"><td><code>instrumentation.ts</code></td><td>Next.js boot hook — starts the poller exactly once per server process (nodejs runtime only, not edge).</td><td>poller.ts</td></tr>
     <tr id="kf-middleware"><td><code>middleware.ts</code></td><td>withAuth gatekeeper for pages + /api/watchlist, /api/password. Verifies the JWT cookie before any handler runs; 307 → /login with callbackUrl.</td><td>JWT cookie (no DB)</td></tr>
-    <tr id="kf-poller"><td><code>app/lib/poller.ts</code></td><td>15s surveillance heartbeat: distinct watched ids → prices (parity-first) → detector → cache. Failed tick keeps the previous snapshot.</td><td>prisma, coingecko, detector, cache, logger</td></tr>
-    <tr id="kf-detector"><td><code>app/lib/detector.ts</code></td><td>The brain: baseline math (formula in Flow C), crash/surge thresholds, 60s per-direction cooldowns, DB dedup, seedBaseline point-zero.</td><td>prisma (INSERT CryptoAlert), logger</td></tr>
-    <tr id="kf-cache"><td><code>app/lib/cache.ts</code></td><td>RAM store on globalThis: latest Coin[], active alert/surge ids, updatedAt. The decoupling point between engine and browsers.</td><td>read by /api/prices + SSR pages</td></tr>
-    <tr id="kf-coingecko"><td><code>app/lib/coingecko.ts</code></td><td>The ONLY file that talks to CoinGecko. 8s timeout, honest status (ok/rate_limit/down/network), 15s/30s micro-caches, in-flight dedup, stale-snapshot fallback. fetchMarkets/fetchGlobal NEVER throw.</td><td>CoinGecko API, logger</td></tr>
+    <tr id="kf-poller"><td><code>app/lib/poller.ts</code></td><td>30s surveillance heartbeat: distinct watched ids → prices (parity-first) → detector → cache. Failed tick keeps the previous snapshot.</td><td>prisma, coingecko, detector, cache, logger</td></tr>
+    <tr id="kf-detector"><td><code>app/lib/detector.ts</code></td><td>The brain: baseline math (formula in Flow C), ±0.1% crash/surge thresholds (spec ±2%), 60s per-direction cooldowns, DB dedup, seedBaseline point-zero.</td><td>prisma (INSERT CryptoAlert), logger</td></tr>
+    <tr id="kf-cache"><td><code>app/lib/cache.ts</code></td><td>RAM store on globalThis: latest LiveCoin[] (Coin + prevPrice from the previous tick), active alert/surge ids, updatedAt + prevUpdatedAt. The decoupling point between engine and browsers.</td><td>read by /api/prices + SSR pages</td></tr>
+    <tr id="kf-coingecko"><td><code>app/lib/coingecko.ts</code></td><td>The ONLY file that talks to CoinGecko. 8s timeout, honest status (ok/rate_limit/down/network), ONE shared 30s micro-cache (top-100 markets + /global totals, fetched in parallel on the same clock), in-flight dedup, 60s circuit breaker after any 429, stale-snapshot fallback (banner only past 90s data age). fetchMarkets/fetchGlobal NEVER throw.</td><td>CoinGecko API, logger</td></tr>
     <tr id="kf-auth"><td><code>app/lib/auth.ts</code></td><td>NextAuth config: credentials authorize() (bcrypt, enumeration-safe, Google-only guard), Google upsert-link, jwt/session dbId stamping.</td><td>prisma, Google OAuth, bcryptjs</td></tr>
     <tr id="kf-logger"><td><code>app/lib/logger.ts</code> · <code>prisma.ts</code></td><td>Structured daily-file logging (async append) · singleton PrismaClient (globalThis-pinned for dev HMR).</td><td>disk logs/ · Supabase Postgres</td></tr>
-    <tr id="kf-readapis"><td><code>api/markets</code> · <code>api/prices</code> · <code>api/overview</code></td><td>Public read endpoints, force-dynamic: markets = coingecko micro-cache; prices = pure getCache() RAM read; overview = global + markets combined.</td><td>coingecko.ts / cache.ts</td></tr>
+    <tr id="kf-readapis"><td><code>api/markets</code> · <code>api/prices</code> · <code>api/overview</code></td><td>Public read endpoints, force-dynamic: markets = coingecko micro-cache; prices = pure getCache() RAM read; overview = /global totals + markets combined.</td><td>coingecko.ts / cache.ts</td></tr>
     <tr id="kf-watchapi"><td><code>api/watchlist/route.ts</code> + <code>[id]</code></td><td>🔒 Star/un-star: session re-check, JSON validation (400), upsert (double-click safe), point-zero baseline seed, delete.</td><td>prisma, coingecko, detector</td></tr>
     <tr id="kf-alertsapi"><td><code>api/alerts/route.ts</code></td><td>🔒 GET last 50 alerts scoped to YOUR watched ids · DELETE clears the same scope → {cleared:n}.</td><td>prisma</td></tr>
-    <tr id="kf-authapi"><td><code>api/auth/[...nextauth]</code> · <code>signup</code> · <code>api/password</code> · <code>api/tutorial</code></td><td>NextAuth catch-all · signup (server-side passkey rules, P2002-race safe) · 🔒 password set/change · 🔒 tutorial_completed flag.</td><td>auth.ts, prisma, bcryptjs</td></tr>
-    <tr id="kf-pages"><td><code>(app)/*/page.tsx</code> ×6</td><td>SSR first paint. Every Prisma read guarded: list pages degrade to empty data; profile/settings distinguish undefined (DB error → OfflineNotice) from null (no user → /login).</td><td>prisma, cache.ts, getServerSession</td></tr>
-    <tr id="kf-market"><td><code>market/MarketTable.tsx</code></td><td>Client: top-100 table, search, 15s poll, optimistic ⭐ with rollback, stale/status banners.</td><td>/api/markets, /api/watchlist</td></tr>
-    <tr id="kf-watchlist"><td><code>watchlist/WatchlistView.tsx</code></td><td>Client: live cards @5s, crash/surge pulse styling, optimistic remove with ConfirmDialog.</td><td>/api/prices, /api/watchlist/[id]</td></tr>
-    <tr id="kf-dashboard"><td><code>dashboard/DashboardLive.tsx</code></td><td>Client: global overview @15s + system alerts panel @5s, directional market bars.</td><td>/api/overview, /api/alerts</td></tr>
-    <tr id="kf-alertsview"><td><code>alerts/AlertsView.tsx</code></td><td>Client: full alert feed @5s, crash/surge card design, Clear-all behind themed ConfirmDialog.</td><td>/api/alerts</td></tr>
+    <tr id="kf-authapi"><td><code>api/auth/[...nextauth]</code> · <code>signup</code> · <code>api/password</code> · <code>api/tutorial</code> · <code>api/avatar</code></td><td>NextAuth catch-all · signup (server-side passkey rules, P2002-race safe) · 🔒 password set/change · 🔒 tutorial_completed flag · 🔒 avatar POST/DELETE (validates base64 data-URL png/jpeg/webp, ≤150k chars → User.avatar).</td><td>auth.ts, prisma, bcryptjs</td></tr>
+    <tr id="kf-pages"><td><code>(app)/*/page.tsx</code> ×6</td><td>SSR first paint. Every Prisma read guarded: list pages degrade to empty data; profile/settings distinguish undefined (DB error → OfflineNotice) from null (no user → /login). Profile renders <code>AvatarUploader</code> (client-side canvas resize to 192px JPEG → POST /api/avatar).</td><td>prisma, cache.ts, getServerSession</td></tr>
+    <tr id="kf-market"><td><code>market/MarketTable.tsx</code></td><td>Client: top-100 table, search, 10s poll (same cadence as the watchlist browser — reads the shared 30s snapshot from cache, zero extra CoinGecko calls, so it never sits frozen between reads), optimistic ⭐ with rollback, stale/status banners. "Last 30s" column = tick-over-tick <code>(price − prevPrice)/prevPrice × 100</code> — the SAME move the watchlist cards show, next to a separate 24H column (CoinGecko's 24-hour market-cap change, <code>market_cap_change_percentage_24h</code>), so a coin reads the same % on both pages. Three states: ▴ up (green) · ▾ down (red) · plain <code>0.00%</code> muted when flat (no leading dash — it would read as a minus on a zero). While no baseline exists yet (no prior tick), the cell shows a pulsing skeleton loader instead of a dash, so it reads as "loading".</td><td>/api/markets, /api/watchlist</td></tr>
+    <tr id="kf-watchlist"><td><code>watchlist/WatchlistView.tsx</code></td><td>Client: live cards @10s — tick delta <code>(price − prevPrice)/prevPrice × 100</code> shown as ▴ up / ▾ down / plain <code>0.00%</code> muted when flat (direction judged on the ROUNDED label so a −0.0009% move reads flat, not a red drop), prev→new price strip with measured tick gap + fetch time — crash/surge pulse styling, optimistic remove with ConfirmDialog.</td><td>/api/prices, /api/watchlist/[id]</td></tr>
+    <tr id="kf-dashboard"><td><code>dashboard/DashboardLive.tsx</code></td><td>Client: global overview @15s + system alerts panel @10s, directional market bars.</td><td>/api/overview, /api/alerts</td></tr>
+    <tr id="kf-alertsview"><td><code>alerts/AlertsView.tsx</code></td><td>Client: full alert feed @10s, crash/surge card design, Clear-all behind themed ConfirmDialog.</td><td>/api/alerts</td></tr>
     <tr id="kf-authpages"><td><code>login/page.tsx</code> · <code>register/page.tsx</code></td><td>Client auth forms: signIn(redirect:false) inline errors · signup fetch + auto-login · Google button.</td><td>/api/auth/*, /api/auth/signup</td></tr>
-    <tr id="kf-shared"><td><code>components/</code></td><td>Toaster (useToast context) · ConfirmDialog · ConnectionStatus (navigator.onLine banner) · OfflineNotice (server-safe retry tile) · Sidebar/TopBar.</td><td>consumed everywhere</td></tr>
-    <tr id="kf-prisma"><td><code>prisma/schema.prisma</code></td><td>User / Watchlist / CryptoAlert models, @@unique + @@index choices, pooled vs direct connection URLs.</td><td>Supabase Postgres</td></tr>
+    <tr id="kf-shared"><td><code>components/</code></td><td>Toaster (useToast context) · ConfirmDialog · ConnectionStatus (navigator.onLine banner) · OfflineNotice (server-safe retry tile) · Sidebar/TopBar — Sidebar polls /api/alerts @10s and shows a Slack-style unread dot on the Alerts item when the newest detected_at is newer than the localStorage seen-stamp (visiting /alerts marks seen).</td><td>consumed everywhere</td></tr>
+    <tr id="kf-prisma"><td><code>prisma/schema.prisma</code></td><td>User (incl. <code>avatar String?</code> — base64 data-URL) / Watchlist / CryptoAlert models, @@unique + @@index choices, pooled vs direct connection URLs.</td><td>Supabase Postgres</td></tr>
     <tr id="kf-extcg"><td><i>external</i> — CoinGecko API</td><td>Sole price source. Free tier ~5-15 calls/min/IP — the whole micro-cache/batch/parity design exists to live inside this budget.</td><td>coingecko.ts only</td></tr>
     <tr id="kf-extgoogle"><td><i>external</i> — Google OAuth</td><td>Identity provider for one-click sign-in; only the profile email + id are consumed.</td><td>auth.ts (NextAuth provider)</td></tr>
     <tr id="kf-logs"><td><code>logs/app-YYYY-MM-DD.log</code></td><td>Daily structured log sink: fetch audits, per-asset moves, alert lifecycle, error context.</td><td>written by logger.ts</td></tr>
-    <tr><td><code style="color:var(--red)">surveillance-engine/</code> (repo root)</td><td style="color:var(--muted)">Legacy standalone scaffold — never imported by the running app. Safe to ignore while learning.</td><td>—</td></tr>
   </table>
 
   <!-- ================================================= 05 TECH STACK -->
@@ -401,14 +410,16 @@ baseline['pepe'] ← 0.00000972   <span class="mt">// a further −2% from HERE 
     <tr><td>Passwords</td><td>bcryptjs (cost 10)</td><td>hash on signup, compare on login — plaintext never stored.</td></tr>
     <tr><td>ORM / DB</td><td>Prisma <b>6</b> → Supabase PostgreSQL</td><td>Pooled :6543 for queries, DIRECT_URL :5432 for migrations; DB is remote → all SSR reads guarded.</td></tr>
     <tr><td>Hot data</td><td>globalThis RAM (no Redis)</td><td>Single process makes a module-level store sufficient; survives dev HMR via globalThis pinning.</td></tr>
-    <tr><td>Prices</td><td>CoinGecko free API</td><td>Micro-caches + shared snapshots + ?ids= batching keep total spend ≈ 8 calls/min regardless of user count.</td></tr>
+    <tr><td>Prices</td><td>CoinGecko free API</td><td>ONE shared 30s micro-cache + shared snapshots + ?ids= batching keep total spend ≈ 4 calls/min regardless of user count.</td></tr>
     <tr><td>UI</td><td>Tailwind CSS 3.4 (token-only) · framer-motion</td><td>Tactical-terminal design system via CSS custom properties; motion for toasts/dialogs.</td></tr>
-    <tr><td>Realtime model</td><td>HTTP polling (5s / 15s)</td><td>Deliberate: no websockets — the RAM cache makes polls cheap, and polling survives proxies and flaky networks.</td></tr>
+    <tr><td>Realtime model</td><td>HTTP polling (10s / 15s)</td><td>Deliberate: no websockets — the RAM cache makes polls cheap, and polling survives proxies and flaky networks.</td></tr>
   </table>
 
   <div class="note">
-    <b>⚠ Current gotchas:</b> detector thresholds are still in <b>±0.01% TEST MODE</b>
-    (<code>detector.ts</code> — spec values ±2.0%) so alerts fire on nearly any movement.
+    <b>⚠ Current gotchas:</b> detector thresholds are currently <b>±0.1%</b>
+    (<code>detector.ts</code> — spec values ±2.0%), more sensitive than spec so real intraday moves still fire.
+    Editing <code>poller.ts</code> / <code>cache.ts</code> / <code>detector.ts</code> requires a full dev-server
+    restart — the running poller's <code>setInterval</code> closure keeps the old code alive through HMR.
     And the whole Lane-1 design assumes <b>one long-lived Node process</b> — deploying to
     serverless (Vercel functions) would kill the poller and the RAM cache; a VPS / container / VM is the target shape.
   </div>

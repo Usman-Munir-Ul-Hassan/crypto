@@ -3,13 +3,12 @@
 //   1. this user's watchlist rows from Postgres (WHICH coins to show)
 //   2. the RAM cache the poller fills (their latest PRICES)
 // It merges them so the page paints real cards instantly, then hands off to the
-// client half which polls /api/prices every 5s to keep them live.
+// client half which polls /api/prices every 10s to keep them live.
 
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
-import { getCache } from "@/app/lib/cache";
-import type { Coin } from "@/app/lib/coingecko";
+import { getCache, type LiveCoin } from "@/app/lib/cache";
 import WatchlistView from "./WatchlistView";
 
 export const dynamic = "force-dynamic"; // always render fresh — never a stale cache
@@ -37,12 +36,13 @@ export default async function WatchlistPage() {
   const rows = userId ? await getWatchlistRows(userId) : [];
 
   // Index the poller's snapshot by id so we can enrich each watchlist row.
-  const priceById = new Map(getCache().data.map((c) => [c.id, c]));
+  const cache = getCache();
+  const priceById = new Map(cache.data.map((c) => [c.id, c]));
 
   // Build one card per watchlisted coin. If the poller has already fetched it,
   // use the live data; otherwise seed a placeholder (name from DB, price 0) that
-  // the 5s client poll will fill within the next 30s tick.
-  const initialCoins: Coin[] = rows.map((r) => {
+  // the 10s client poll will fill within the next 30s tick.
+  const initialCoins: LiveCoin[] = rows.map((r) => {
     const live = priceById.get(r.asset_id);
     return (
       live ?? {
@@ -54,9 +54,16 @@ export default async function WatchlistPage() {
         price: 0,
         change: 0,
         marketCap: 0,
+        prevPrice: null, // no tick history yet — card hides the prev-tick strip
       }
     );
   });
 
-  return <WatchlistView initialCoins={initialCoins} />;
+  return (
+    <WatchlistView
+      initialCoins={initialCoins}
+      initialUpdatedAt={cache.updatedAt}
+      initialPrevUpdatedAt={cache.prevUpdatedAt}
+    />
+  );
 }
