@@ -12,7 +12,6 @@
     "@arcjet/node": "^1.5.0",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
-    "deep-email-validator": "^0.1.27",
     "framer-motion": "^12.43.0",
     "next": "14.2.35",
     "next-auth": "^4.24.15",

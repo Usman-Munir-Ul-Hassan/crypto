@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/app/lib/prisma";
+import { guardEmail } from "@/app/lib/email-guard";
 
 // Server-side mirror of the register form's passkey rules —
 // the form can be bypassed (DevTools/curl), this cannot.
@@ -33,6 +34,13 @@ export async function POST(req: Request) {
       { error: "Weak passkey — must satisfy all requirements" },
       { status: 400 }
     );
+  }
+
+  // Spam-trap gate: reject test@, admin@, disposable domains, and domains
+  // with no mail records BEFORE any account row exists. No email is sent.
+  const guard = await guardEmail(email);
+  if (!guard.ok) {
+    return NextResponse.json({ error: guard.reason }, { status: 400 });
   }
 
   try {

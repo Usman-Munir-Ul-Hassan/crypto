@@ -2,13 +2,12 @@
 
 // Watchlist — CLIENT half of Lane 1's live view. Seeded by the server with the
 // user’s coins (already‑priced where the cache had them), then it polls
-// /api/prices every 30s (same cadence as the detector) so the list stays live
-// without flooding the server. The 30s poll reads the
+// /api/prices every 5s so the list stays live. The 5s poll reads the
 // RAM cache only — the real CoinGecko call happens on the server's 30s poller.
 // Removing a coin hits DELETE /api/watchlist/[id] (Lane 2's write path).
 // Tactical Terminal spec — token classes only, no raw hex.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import type { LiveCoin } from "@/app/lib/cache";
@@ -69,6 +68,50 @@ export default function WatchlistView({
   // Keep the live id set in a ref so the poll callback always sees the latest
   // without re-subscribing the interval on every render.
   const idsRef = useRef<string[]>(initialCoins.map((c) => c.id));
+  // Ids whose DELETE request is still in flight — syncWatchlist must not
+  // re-add them while the DB row still exists server-side.
+  const pendingRemovalsRef = useRef<Set<string>>(new Set());
+
+  // Re-sync the LIST (not prices) against the DB. A coin starred on another
+  // page is missing from this render — or from the browser's 30s router-cached
+  // render — and the price poll can't create it (it only updates cards already
+  // on screen). Fetching /api/watchlist gives us the true membership, so we
+  // CREATE a placeholder card for every missing coin (newest first, matching
+  // the server's order); the next price tick fills its numbers in.
+  const syncWatchlist = useCallback(async () => {
+    try {
+      const res = await fetch("/api/watchlist");
+      if (!res.ok) return; // transient blip — next tick retries
+      const rows = (await res.json()) as { id: string; name: string }[];
+      if (!Array.isArray(rows)) return;
+
+      const have = new Set(idsRef.current);
+      const missing = rows.filter(
+        (r) => !have.has(r.id) && !pendingRemovalsRef.current.has(r.id)
+      );
+      if (missing.length === 0) return;
+
+      const placeholders: LiveCoin[] = missing.map((r) => ({
+        rank: 0,
+        id: r.id,
+        name: r.name,
+        symbol: "",
+        image: "",
+        price: 0,
+        change: 0,
+        marketCap: 0,
+        prevPrice: null, // no tick history yet — card hides the prev-tick strip
+      }));
+      idsRef.current = [...idsRef.current, ...missing.map((r) => r.id)];
+      setCoins((prev) => [...placeholders, ...prev]);
+    } catch {
+      // Network hiccup — ignore this sync, the next tick will catch up.
+    }
+  }, []);
+
+  useEffect(() => {
+    void syncWatchlist();
+  }, [syncWatchlist]);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,21 +139,25 @@ export default function WatchlistView({
         setSurges(new Set(json.surges ?? []));
         setUpdatedAt(json.updatedAt ?? 0);
         setPrevUpdatedAt(json.prevUpdatedAt ?? 0);
+        // Membership re-check: catch coins starred elsewhere (or by another
+        // tab) that this render never knew about — creates their cards.
+        void syncWatchlist();
       } catch {
         // Network hiccup — ignore this tick, the next one will catch up.
       }
     }
 
-    const interval = setInterval(poll, 30000); // server already seeded the first paint, now matching 30‑second detection cycle
+    const interval = setInterval(poll, 5000); // frontend refreshes every 5s — the server's 30s poller is untouched
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [syncWatchlist]);
 
   async function remove(id: string) {
     if (removing.has(id)) return;
     setRemoving((prev) => new Set(prev).add(id));
+    pendingRemovalsRef.current.add(id);
 
     // Optimistic: drop the card now, restore it if the request fails.
     const snapshot = coins;
@@ -127,6 +174,7 @@ export default function WatchlistView({
       idsRef.current = snapshot.map((c) => c.id);
       toast("error", `Couldn't remove ${name} — try again`);
     } finally {
+      pendingRemovalsRef.current.delete(id);
       setRemoving((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -320,7 +368,7 @@ export default function WatchlistView({
       )}
 
       <p className="mt-6 font-mono text-[8px] uppercase tracking-[0.3em] text-muted">
-        {"// Live feed · server polls CoinGecko every 5s · browser refreshes every 5s"}
+        {"// Live feed · server polls CoinGecko every 30s · browser refreshes every 5s"}
       </p>
     </main>
   );

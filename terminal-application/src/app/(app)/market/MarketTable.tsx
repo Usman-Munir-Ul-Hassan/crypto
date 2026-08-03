@@ -2,7 +2,7 @@
 
 // Market table — CLIENT half of the browse page (Lane 2). Seeded with the coins
 // fetched on the server for a fast first paint, then re-pulls /api/markets every
-// 10s (same cadence as the watchlist's browser refresh) so the table stays live
+// 5s so the table stays live
 // in the background instead of sitting frozen for 30s between reads. The Delta
 // column shows the SAME tick-over-tick move the watchlist cards show —
 // (price − prevPrice) / prevPrice × 100, prevPrice being this coin's price on

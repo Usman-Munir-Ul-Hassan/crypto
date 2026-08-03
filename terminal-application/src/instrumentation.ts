@@ -10,5 +10,9 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { startPoller } = await import("@/app/lib/poller");
     startPoller();
+    // Keeps the disposable-email blocklist current (boot + daily) so new
+    // burner domains are blocked without any manual maintenance.
+    const { startDisposableRefresh } = await import("@/app/lib/email-guard");
+    startDisposableRefresh();
   }
 }
